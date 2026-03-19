@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ from .db import (
     mark_item_expanded,
     record_source_run,
     upsert_document,
+    upsert_document_relevance,
     upsert_document_text,
     upsert_item,
     upsert_source,
@@ -23,6 +25,7 @@ from .db import (
 from .html_links import LinkExtractor, filter_links
 from .laserfiche import LaserficheClient, extract_folder_id
 from .pdf_text import PDFTextExtractor
+from .relevance import analyze_relevance
 
 
 DEFAULT_CONFIG_PATH = Path("config/sources.json")
@@ -131,6 +134,7 @@ def collect_documents_for_new_laserfiche_items(
     stamp = fetched_at.strftime("%Y%m%dT%H%M%SZ")
     new_documents = 0
     expanded_items = 0
+    relevant_documents = 0
 
     print(f"expanding_items={len(items_to_process)}")
 
@@ -175,13 +179,30 @@ def collect_documents_for_new_laserfiche_items(
                 page_count=extraction.page_count,
                 extracted_at=fetched_at.isoformat(),
             )
+            relevance = analyze_relevance(pdf_link.title, extraction.text)
+            upsert_document_relevance(
+                connection,
+                document_id=document_id,
+                is_relevant=relevance.is_relevant,
+                score=relevance.score,
+                categories_json=json.dumps(relevance.categories),
+                matched_terms_json=json.dumps(relevance.matched_terms),
+                matches_json=relevance.matches_json,
+                rationale=relevance.rationale,
+                analyzed_at=fetched_at.isoformat(),
+            )
             connection.commit()
             elapsed = time.monotonic() - document_started
+            if relevance.is_relevant:
+                relevant_documents += 1
             print(
                 f"  [pdf {pdf_index}/{len(pdf_links)}] {pdf_link.title} "
                 f"pages={extraction.page_count} method={extraction.method} "
-                f"chars={len(extraction.text)} seconds={elapsed:.1f}"
+                f"chars={len(extraction.text)} score={relevance.score} "
+                f"relevant={str(relevance.is_relevant).lower()} seconds={elapsed:.1f}"
             )
+            if relevance.is_relevant:
+                print(f"    rationale={relevance.rationale}")
 
         mark_item_expanded(
             connection,
@@ -194,7 +215,7 @@ def collect_documents_for_new_laserfiche_items(
         expanded_items += 1
         print(f"[meeting complete] {meeting_title} seconds={time.monotonic() - meeting_started:.1f}")
 
-    return new_documents, expanded_items
+    return new_documents, expanded_items, relevant_documents
 
 
 def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document_download_limit: int | None = None) -> None:
@@ -238,8 +259,9 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document
 
         new_documents = 0
         expanded_items = 0
+        relevant_documents = 0
         if source.kind == "laserfiche_meeting_folders":
-            new_documents, expanded_items = collect_documents_for_new_laserfiche_items(
+            new_documents, expanded_items, relevant_documents = collect_documents_for_new_laserfiche_items(
                 source,
                 items_requiring_expansion,
                 fetched_at,
@@ -260,6 +282,7 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document
         print(f"items_requiring_expansion={len(items_requiring_expansion)}")
         print(f"expanded_items={expanded_items}")
         print(f"new_documents={new_documents}")
+        print(f"relevant_documents={relevant_documents}")
     for title, url in new_items[:10]:
         print(f"- {title} -> {url}")
 

@@ -62,6 +62,18 @@ CREATE TABLE IF NOT EXISTS document_texts (
     extracted_at TEXT NOT NULL,
     FOREIGN KEY (document_id) REFERENCES documents(document_id)
 );
+
+CREATE TABLE IF NOT EXISTS document_relevance (
+    document_id TEXT PRIMARY KEY,
+    is_relevant INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    categories_json TEXT NOT NULL,
+    matched_terms_json TEXT NOT NULL,
+    matches_json TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    FOREIGN KEY (document_id) REFERENCES documents(document_id)
+);
 """
 
 
@@ -227,5 +239,69 @@ def upsert_document_text(
         WHERE document_id = ?
         """,
         (text_path, extracted_text, extraction_method, page_count, extracted_at, document_id),
+    )
+    return False
+
+
+def upsert_document_relevance(
+    connection: sqlite3.Connection,
+    document_id: str,
+    is_relevant: bool,
+    score: int,
+    categories_json: str,
+    matched_terms_json: str,
+    matches_json: str,
+    rationale: str,
+    analyzed_at: str,
+) -> bool:
+    existing = connection.execute(
+        "SELECT document_id FROM document_relevance WHERE document_id = ?",
+        (document_id,),
+    ).fetchone()
+
+    if existing is None:
+        connection.execute(
+            """
+            INSERT INTO document_relevance (
+                document_id,
+                is_relevant,
+                score,
+                categories_json,
+                matched_terms_json,
+                matches_json,
+                rationale,
+                analyzed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                document_id,
+                int(is_relevant),
+                score,
+                categories_json,
+                matched_terms_json,
+                matches_json,
+                rationale,
+                analyzed_at,
+            ),
+        )
+        return True
+
+    connection.execute(
+        """
+        UPDATE document_relevance
+        SET is_relevant = ?, score = ?, categories_json = ?, matched_terms_json = ?, matches_json = ?, rationale = ?, analyzed_at = ?
+        WHERE document_id = ?
+        """,
+        (
+            int(is_relevant),
+            score,
+            categories_json,
+            matched_terms_json,
+            matches_json,
+            rationale,
+            analyzed_at,
+            document_id,
+        ),
     )
     return False

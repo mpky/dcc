@@ -10,6 +10,7 @@ Track the Loudoun County Board of Supervisors business-meeting packet repository
 - extracted meeting folders stored in SQLite
 - PDFs from newly discovered meeting folders downloaded locally
 - extracted PDF text stored locally and in SQLite
+- rules-based relevance scoring stored in SQLite
 - new meeting entries reported on stdout
 
 This is intentionally smaller than keyword filtering, summarization, or email delivery. The immediate goal is proving that one source is stable and can be monitored idempotently.
@@ -45,6 +46,6 @@ uv run python scripts/run_once.py --db-path data/app.db --data-dir data
 
 After this baseline works:
 
-1. add keyword relevance filtering
-2. add item-body parsing for PDFs
-3. add email notifications
+1. tune keyword relevance filtering with real false positives/negatives
+2. add digest assembly and email notifications
+3. add LLM summarization only for relevant documents
