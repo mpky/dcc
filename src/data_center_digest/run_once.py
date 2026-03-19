@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 from .config import SourceConfig, load_sources
 from .db import connect, record_source_run, upsert_item, upsert_source
 from .html_links import LinkExtractor, filter_links
+from .laserfiche import LaserficheClient
 
 
 DEFAULT_CONFIG_PATH = Path("config/sources.json")
@@ -60,12 +61,39 @@ def discover_links(source: SourceConfig, html_bytes: bytes) -> list[tuple[str, s
     return discovered
 
 
-def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path) -> None:
-    fetched_at = datetime.now(UTC)
+def run_generic_source(source: SourceConfig, fetched_at: datetime, data_dir: Path) -> tuple[Path, str, list[tuple[str, str, str]]]:
     html_bytes = fetch_html(source.url)
     snapshot_path = snapshot_path_for(source.id, fetched_at, data_dir)
     snapshot_hash = save_snapshot(html_bytes, snapshot_path)
     discovered = discover_links(source, html_bytes)
+    return snapshot_path, snapshot_hash, discovered
+
+
+def run_laserfiche_source(source: SourceConfig, fetched_at: datetime, data_dir: Path) -> tuple[Path, str, list[tuple[str, str, str]]]:
+    client = LaserficheClient(user_agent=USER_AGENT)
+    discovery = client.discover_meetings(source)
+
+    root_snapshot_path = data_dir / "raw" / source.id / f"{fetched_at.strftime('%Y%m%dT%H%M%SZ')}-root.html"
+    snapshot_hash = save_snapshot(discovery.root_html, root_snapshot_path)
+
+    for year_title, html_bytes in discovery.year_pages:
+        year_snapshot_path = data_dir / "raw" / source.id / f"{fetched_at.strftime('%Y%m%dT%H%M%SZ')}-{year_title}.html"
+        save_snapshot(html_bytes, year_snapshot_path)
+
+    discovered = []
+    for link in discovery.meetings:
+        item_id = hashlib.sha256(link.url.encode("utf-8")).hexdigest()
+        discovered.append((item_id, link.title, link.url))
+
+    return root_snapshot_path, snapshot_hash, discovered
+
+
+def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path) -> None:
+    fetched_at = datetime.now(UTC)
+    if source.kind == "laserfiche_meeting_folders":
+        snapshot_path, snapshot_hash, discovered = run_laserfiche_source(source, fetched_at, data_dir)
+    else:
+        snapshot_path, snapshot_hash, discovered = run_generic_source(source, fetched_at, data_dir)
 
     connection = connect(db_path)
     try:
