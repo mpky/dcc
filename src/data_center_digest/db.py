@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS items (
     FOREIGN KEY (source_id) REFERENCES sources(source_id)
 );
 
+CREATE TABLE IF NOT EXISTS item_expansions (
+    item_id TEXT PRIMARY KEY,
+    snapshot_path TEXT NOT NULL,
+    document_count INTEGER NOT NULL,
+    expanded_at TEXT NOT NULL,
+    FOREIGN KEY (item_id) REFERENCES items(item_id)
+);
+
 CREATE TABLE IF NOT EXISTS documents (
     document_id TEXT PRIMARY KEY,
     item_id TEXT NOT NULL,
@@ -122,6 +130,34 @@ def upsert_item(connection: sqlite3.Connection, item_id: str, source_id: str, ti
         (title, url, seen_at, item_id),
     )
     return False
+
+
+def item_needs_expansion(connection: sqlite3.Connection, item_id: str) -> bool:
+    row = connection.execute(
+        "SELECT item_id FROM item_expansions WHERE item_id = ?",
+        (item_id,),
+    ).fetchone()
+    return row is None
+
+
+def mark_item_expanded(
+    connection: sqlite3.Connection,
+    item_id: str,
+    snapshot_path: str,
+    document_count: int,
+    expanded_at: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO item_expansions (item_id, snapshot_path, document_count, expanded_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(item_id) DO UPDATE SET
+            snapshot_path = excluded.snapshot_path,
+            document_count = excluded.document_count,
+            expanded_at = excluded.expanded_at
+        """,
+        (item_id, snapshot_path, document_count, expanded_at),
+    )
 
 
 def upsert_document(

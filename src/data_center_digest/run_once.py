@@ -5,11 +5,21 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 import re
+import time
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .config import SourceConfig, load_sources
-from .db import connect, record_source_run, upsert_document, upsert_document_text, upsert_item, upsert_source
+from .db import (
+    connect,
+    item_needs_expansion,
+    mark_item_expanded,
+    record_source_run,
+    upsert_document,
+    upsert_document_text,
+    upsert_item,
+    upsert_source,
+)
 from .html_links import LinkExtractor, filter_links
 from .laserfiche import LaserficheClient, extract_folder_id
 from .pdf_text import PDFTextExtractor
@@ -106,28 +116,34 @@ def run_laserfiche_source(source: SourceConfig, fetched_at: datetime, data_dir: 
 
 def collect_documents_for_new_laserfiche_items(
     source: SourceConfig,
-    new_items: list[tuple[str, str, str]],
+    items_to_expand: list[tuple[str, str, str]],
     fetched_at: datetime,
     data_dir: Path,
     connection,
     document_download_limit: int | None,
-) -> int:
-    if not new_items:
-        return 0
+) -> tuple[int, int]:
+    if not items_to_expand:
+        return 0, 0
 
-    items_to_process = new_items[:document_download_limit] if document_download_limit is not None else new_items
+    items_to_process = items_to_expand[:document_download_limit] if document_download_limit is not None else items_to_expand
     client = LaserficheClient(user_agent=USER_AGENT)
     extractor = PDFTextExtractor()
     stamp = fetched_at.strftime("%Y%m%dT%H%M%SZ")
     new_documents = 0
+    expanded_items = 0
 
-    for item_id, _, meeting_url in items_to_process:
+    print(f"expanding_items={len(items_to_process)}")
+
+    for item_index, (item_id, meeting_title, meeting_url) in enumerate(items_to_process, start=1):
+        meeting_started = time.monotonic()
         artifact, pdf_links = client.fetch_meeting_documents(source, meeting_url)
         meeting_folder_id = extract_folder_id(meeting_url)
         snapshot_path = data_dir / "raw" / source.id / f"{stamp}-{artifact.name}.{artifact.extension}"
         save_snapshot(artifact.content, snapshot_path)
+        print(f"[meeting {item_index}/{len(items_to_process)}] {meeting_title} pdfs={len(pdf_links)}")
 
-        for pdf_link in pdf_links:
+        for pdf_index, pdf_link in enumerate(pdf_links, start=1):
+            document_started = time.monotonic()
             file_name = Path(unquote(urlparse(pdf_link.url).path)).name
             local_path = data_dir / "items" / source.id / meeting_folder_id / safe_filename(file_name)
             pdf_bytes = client.fetch(pdf_link.url)
@@ -159,8 +175,26 @@ def collect_documents_for_new_laserfiche_items(
                 page_count=extraction.page_count,
                 extracted_at=fetched_at.isoformat(),
             )
+            connection.commit()
+            elapsed = time.monotonic() - document_started
+            print(
+                f"  [pdf {pdf_index}/{len(pdf_links)}] {pdf_link.title} "
+                f"pages={extraction.page_count} method={extraction.method} "
+                f"chars={len(extraction.text)} seconds={elapsed:.1f}"
+            )
 
-    return new_documents
+        mark_item_expanded(
+            connection,
+            item_id=item_id,
+            snapshot_path=str(snapshot_path),
+            document_count=len(pdf_links),
+            expanded_at=fetched_at.isoformat(),
+        )
+        connection.commit()
+        expanded_items += 1
+        print(f"[meeting complete] {meeting_title} seconds={time.monotonic() - meeting_started:.1f}")
+
+    return new_documents, expanded_items
 
 
 def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document_download_limit: int | None = None) -> None:
@@ -183,7 +217,6 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document
         )
 
         new_items: list[tuple[str, str]] = []
-        new_item_records: list[tuple[str, str, str]] = []
         for item_id, title, url in discovered:
             is_new = upsert_item(
                 connection,
@@ -195,13 +228,20 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document
             )
             if is_new:
                 new_items.append((title, url))
-                new_item_records.append((item_id, title, url))
+
+        items_requiring_expansion = [
+            (item_id, title, url)
+            for item_id, title, url in discovered
+            if item_needs_expansion(connection, item_id)
+        ]
+        connection.commit()
 
         new_documents = 0
+        expanded_items = 0
         if source.kind == "laserfiche_meeting_folders":
-            new_documents = collect_documents_for_new_laserfiche_items(
+            new_documents, expanded_items = collect_documents_for_new_laserfiche_items(
                 source,
-                new_item_records,
+                items_requiring_expansion,
                 fetched_at,
                 data_dir,
                 connection,
@@ -217,6 +257,8 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document
     print(f"discovered_links={len(discovered)}")
     print(f"new_items={len(new_items)}")
     if source.kind == "laserfiche_meeting_folders":
+        print(f"items_requiring_expansion={len(items_requiring_expansion)}")
+        print(f"expanded_items={expanded_items}")
         print(f"new_documents={new_documents}")
     for title, url in new_items[:10]:
         print(f"- {title} -> {url}")
