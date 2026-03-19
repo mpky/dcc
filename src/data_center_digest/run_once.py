@@ -9,9 +9,10 @@ from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .config import SourceConfig, load_sources
-from .db import connect, record_source_run, upsert_document, upsert_item, upsert_source
+from .db import connect, record_source_run, upsert_document, upsert_document_text, upsert_item, upsert_source
 from .html_links import LinkExtractor, filter_links
 from .laserfiche import LaserficheClient, extract_folder_id
+from .pdf_text import PDFTextExtractor
 
 
 DEFAULT_CONFIG_PATH = Path("config/sources.json")
@@ -116,6 +117,7 @@ def collect_documents_for_new_laserfiche_items(
 
     items_to_process = new_items[:document_download_limit] if document_download_limit is not None else new_items
     client = LaserficheClient(user_agent=USER_AGENT)
+    extractor = PDFTextExtractor()
     stamp = fetched_at.strftime("%Y%m%dT%H%M%SZ")
     new_documents = 0
 
@@ -143,6 +145,20 @@ def collect_documents_for_new_laserfiche_items(
             )
             if is_new:
                 new_documents += 1
+
+            extraction = extractor.extract(local_path)
+            text_file_name = f"{Path(file_name).stem}.txt"
+            text_path = data_dir / "text" / source.id / meeting_folder_id / safe_filename(text_file_name)
+            save_binary(extraction.text.encode("utf-8"), text_path)
+            upsert_document_text(
+                connection,
+                document_id=document_id,
+                text_path=str(text_path),
+                extracted_text=extraction.text,
+                extraction_method=extraction.method,
+                page_count=extraction.page_count,
+                extracted_at=fetched_at.isoformat(),
+            )
 
     return new_documents
 

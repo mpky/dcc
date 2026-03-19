@@ -3,7 +3,9 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 
 data/app.db
 data/raw/
 data/items/
+data/text/

@@ -9,6 +9,7 @@ Track the Loudoun County Board of Supervisors business-meeting packet repository
 - source feed snapshots saved on each run
 - extracted meeting folders stored in SQLite
 - PDFs from newly discovered meeting folders downloaded locally
+- extracted PDF text stored locally and in SQLite
 - new meeting entries reported on stdout
 
 This is intentionally smaller than keyword filtering, summarization, or email delivery. The immediate goal is proving that one source is stable and can be monitored idempotently.
@@ -30,14 +31,14 @@ The public Loudoun page embeds this Laserfiche folder. The scraper now uses the 
 ## Local run
 
 ```bash
-python3 scripts/run_once.py
+uv run python scripts/run_once.py
 ```
 
 Optional arguments:
 
 ```bash
-python3 scripts/run_once.py --source-id loudoun_bos_meeting_documents
-python3 scripts/run_once.py --db-path data/app.db --data-dir data
+uv run python scripts/run_once.py --source-id loudoun_bos_meeting_documents
+uv run python scripts/run_once.py --db-path data/app.db --data-dir data
 ```
 
 ## What comes next

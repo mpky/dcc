@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS documents (
     downloaded_at TEXT NOT NULL,
     FOREIGN KEY (item_id) REFERENCES items(item_id)
 );
+
+CREATE TABLE IF NOT EXISTS document_texts (
+    document_id TEXT PRIMARY KEY,
+    text_path TEXT NOT NULL,
+    extracted_text TEXT NOT NULL,
+    extraction_method TEXT NOT NULL,
+    page_count INTEGER NOT NULL,
+    extracted_at TEXT NOT NULL,
+    FOREIGN KEY (document_id) REFERENCES documents(document_id)
+);
 """
 
 
@@ -146,5 +156,40 @@ def upsert_document(
         WHERE document_id = ?
         """,
         (title, url, local_path, sha256, seen_at, document_id),
+    )
+    return False
+
+
+def upsert_document_text(
+    connection: sqlite3.Connection,
+    document_id: str,
+    text_path: str,
+    extracted_text: str,
+    extraction_method: str,
+    page_count: int,
+    extracted_at: str,
+) -> bool:
+    existing = connection.execute(
+        "SELECT document_id FROM document_texts WHERE document_id = ?",
+        (document_id,),
+    ).fetchone()
+
+    if existing is None:
+        connection.execute(
+            """
+            INSERT INTO document_texts (document_id, text_path, extracted_text, extraction_method, page_count, extracted_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (document_id, text_path, extracted_text, extraction_method, page_count, extracted_at),
+        )
+        return True
+
+    connection.execute(
+        """
+        UPDATE document_texts
+        SET text_path = ?, extracted_text = ?, extraction_method = ?, page_count = ?, extracted_at = ?
+        WHERE document_id = ?
+        """,
+        (text_path, extracted_text, extraction_method, page_count, extracted_at, document_id),
     )
     return False

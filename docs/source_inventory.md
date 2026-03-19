@@ -22,6 +22,7 @@ This file records both active sources and plausible alternatives so source resea
   - discover meeting folders from year RSS
   - fetch meeting-folder HTML when a new meeting appears
   - download PDFs linked from the new meeting folder
+  - extract text from downloaded PDFs for downstream filtering
   - fall back to HTML crawling if RSS fails
 
 ## Candidate sources
