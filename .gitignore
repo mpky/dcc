@@ -9,3 +9,5 @@ data/app.db
 data/raw/
 data/items/
 data/text/
+data/summaries/
+data/evals/

@@ -13,11 +13,13 @@ from urllib.request import Request, urlopen
 from .config import SourceConfig, load_sources
 from .db import (
     connect,
+    document_needs_summary,
     item_needs_expansion,
     mark_item_expanded,
     record_source_run,
     upsert_document,
     upsert_document_relevance,
+    upsert_document_summary,
     upsert_document_text,
     upsert_item,
     upsert_source,
@@ -26,6 +28,7 @@ from .html_links import LinkExtractor, filter_links
 from .laserfiche import LaserficheClient, extract_folder_id
 from .pdf_text import PDFTextExtractor
 from .relevance import analyze_relevance
+from .summarizer import SummaryRequest, Summarizer, SummarizerError
 
 
 DEFAULT_CONFIG_PATH = Path("config/sources.json")
@@ -41,6 +44,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--source-id", help="Limit execution to a single source id.")
     parser.add_argument("--document-download-limit", type=int, help="Limit document expansion to the first N new meeting folders.")
+    parser.add_argument("--summarize-relevant", action="store_true", help="Summarize relevant documents with the configured LLM backend.")
+    parser.add_argument("--summarize-limit", type=int, help="Limit summaries to the first N relevant documents in this run.")
+    parser.add_argument("--force-resummarize", action="store_true", help="Refresh summaries even if one already exists for the active backend/model.")
     return parser.parse_args()
 
 
@@ -70,6 +76,25 @@ def save_binary(content: bytes, path: Path) -> str:
 def safe_filename(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip()
     return cleaned or "document.pdf"
+
+
+def summary_path_for(
+    *,
+    data_dir: Path,
+    source_id: str,
+    meeting_folder_id: str,
+    document_title: str,
+    backend: str,
+    model: str,
+) -> Path:
+    model_slug = safe_filename(model.replace(":", "-"))
+    file_name = safe_filename(f"{Path(document_title).stem}.{backend}.{model_slug}.json")
+    return data_dir / "summaries" / source_id / meeting_folder_id / file_name
+
+
+def write_summary_file(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def discover_links(source: SourceConfig, html_bytes: bytes) -> list[tuple[str, str, str]]:
@@ -124,9 +149,12 @@ def collect_documents_for_new_laserfiche_items(
     data_dir: Path,
     connection,
     document_download_limit: int | None,
-) -> tuple[int, int]:
+    summarizer: Summarizer | None,
+    summarize_limit: int | None,
+    force_resummarize: bool,
+) -> tuple[int, int, int, int]:
     if not items_to_expand:
-        return 0, 0
+        return 0, 0, 0, 0
 
     items_to_process = items_to_expand[:document_download_limit] if document_download_limit is not None else items_to_expand
     client = LaserficheClient(user_agent=USER_AGENT)
@@ -135,6 +163,7 @@ def collect_documents_for_new_laserfiche_items(
     new_documents = 0
     expanded_items = 0
     relevant_documents = 0
+    summarized_documents = 0
 
     print(f"expanding_items={len(items_to_process)}")
 
@@ -203,6 +232,73 @@ def collect_documents_for_new_laserfiche_items(
             )
             if relevance.is_relevant:
                 print(f"    rationale={relevance.rationale}")
+                should_summarize = summarizer is not None and (
+                    summarize_limit is None or summarized_documents < summarize_limit
+                )
+                if should_summarize and (
+                    force_resummarize
+                    or document_needs_summary(
+                        connection,
+                        document_id=document_id,
+                        backend=summarizer.config.backend,
+                        model=summarizer.config.model,
+                    )
+                ):
+                    try:
+                        summary_result = summarizer.summarize(
+                            SummaryRequest(
+                                title=pdf_link.title,
+                                text=extraction.text,
+                                jurisdiction=source.jurisdiction,
+                                source_url=pdf_link.url,
+                                meeting_title=meeting_title,
+                            )
+                        )
+                    except SummarizerError as exc:
+                        print(f"    summary_error={exc}")
+                    else:
+                        summary_payload = {
+                            "document_id": document_id,
+                            "backend": summary_result.backend,
+                            "model": summary_result.model,
+                            "title": pdf_link.title,
+                            "meeting_title": meeting_title,
+                            "source_url": pdf_link.url,
+                            "summary": summary_result.summary,
+                            "why_it_matters": summary_result.why_it_matters,
+                            "topic_tags": summary_result.topic_tags,
+                            "confidence": summary_result.confidence,
+                            "next_watch": summary_result.next_watch,
+                        }
+                        summary_path = summary_path_for(
+                            data_dir=data_dir,
+                            source_id=source.id,
+                            meeting_folder_id=meeting_folder_id,
+                            document_title=pdf_link.title,
+                            backend=summary_result.backend,
+                            model=summary_result.model,
+                        )
+                        write_summary_file(summary_path, summary_payload)
+                        upsert_document_summary(
+                            connection,
+                            document_id=document_id,
+                            backend=summary_result.backend,
+                            model=summary_result.model,
+                            summary_path=str(summary_path),
+                            summary=summary_result.summary,
+                            why_it_matters=summary_result.why_it_matters,
+                            topic_tags_json=json.dumps(summary_result.topic_tags),
+                            confidence=summary_result.confidence,
+                            next_watch=summary_result.next_watch,
+                            raw_response=summary_result.raw_response,
+                            summarized_at=fetched_at.isoformat(),
+                        )
+                        connection.commit()
+                        summarized_documents += 1
+                        print(
+                            f"    summarized backend={summary_result.backend} "
+                            f"model={summary_result.model} confidence={summary_result.confidence}"
+                        )
 
         mark_item_expanded(
             connection,
@@ -215,10 +311,18 @@ def collect_documents_for_new_laserfiche_items(
         expanded_items += 1
         print(f"[meeting complete] {meeting_title} seconds={time.monotonic() - meeting_started:.1f}")
 
-    return new_documents, expanded_items, relevant_documents
+    return new_documents, expanded_items, relevant_documents, summarized_documents
 
 
-def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document_download_limit: int | None = None) -> None:
+def run_for_source(
+    source: SourceConfig,
+    db_path: Path,
+    data_dir: Path,
+    document_download_limit: int | None = None,
+    summarize_relevant: bool = False,
+    summarize_limit: int | None = None,
+    force_resummarize: bool = False,
+) -> None:
     fetched_at = datetime.now(UTC)
     if source.kind == "laserfiche_meeting_folders":
         snapshot_path, snapshot_hash, discovered = run_laserfiche_source(source, fetched_at, data_dir)
@@ -260,14 +364,19 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document
         new_documents = 0
         expanded_items = 0
         relevant_documents = 0
+        summarized_documents = 0
+        summarizer = Summarizer.from_env() if summarize_relevant else None
         if source.kind == "laserfiche_meeting_folders":
-            new_documents, expanded_items, relevant_documents = collect_documents_for_new_laserfiche_items(
+            new_documents, expanded_items, relevant_documents, summarized_documents = collect_documents_for_new_laserfiche_items(
                 source,
                 items_requiring_expansion,
                 fetched_at,
                 data_dir,
                 connection,
                 document_download_limit=document_download_limit,
+                summarizer=summarizer,
+                summarize_limit=summarize_limit,
+                force_resummarize=force_resummarize,
             )
 
         connection.commit()
@@ -283,6 +392,7 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document
         print(f"expanded_items={expanded_items}")
         print(f"new_documents={new_documents}")
         print(f"relevant_documents={relevant_documents}")
+        print(f"summarized_documents={summarized_documents}")
     for title, url in new_items[:10]:
         print(f"- {title} -> {url}")
 
@@ -301,6 +411,9 @@ def main() -> None:
             db_path=args.db_path,
             data_dir=args.data_dir,
             document_download_limit=args.document_download_limit,
+            summarize_relevant=args.summarize_relevant,
+            summarize_limit=args.summarize_limit,
+            force_resummarize=args.force_resummarize,
         )
 
 

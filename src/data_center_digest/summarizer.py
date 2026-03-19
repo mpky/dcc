@@ -46,6 +46,7 @@ class SummarizerConfig:
     model: str
     endpoint: str
     api_key: str | None = None
+    request_timeout_seconds: int = 60
 
 
 class SummarizerError(RuntimeError):
@@ -70,6 +71,7 @@ class Summarizer:
                         "https://generativelanguage.googleapis.com/v1beta",
                     ),
                     api_key=os.environ.get("GEMINI_API_KEY"),
+                    request_timeout_seconds=int(os.environ.get("SUMMARY_REQUEST_TIMEOUT_SECONDS", "60")),
                 )
             )
 
@@ -77,8 +79,9 @@ class Summarizer:
             return cls(
                 SummarizerConfig(
                     backend="ollama",
-                    model=os.environ.get("OLLAMA_MODEL", "qwen3:8b"),
+                    model=os.environ.get("OLLAMA_MODEL", "gemma3:4b-it-qat"),
                     endpoint=os.environ.get("OLLAMA_API_BASE", "http://localhost:11434"),
+                    request_timeout_seconds=int(os.environ.get("SUMMARY_REQUEST_TIMEOUT_SECONDS", "180")),
                 )
             )
 
@@ -120,7 +123,7 @@ class Summarizer:
                 "responseMimeType": "application/json",
             },
         }
-        response = _post_json(url, body)
+        response = _post_json(url, body, timeout_seconds=self.config.request_timeout_seconds)
         try:
             return response["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -135,7 +138,7 @@ class Summarizer:
             "format": "json",
             "options": {"temperature": 0.2},
         }
-        response = _post_json(url, body)
+        response = _post_json(url, body, timeout_seconds=self.config.request_timeout_seconds)
         try:
             return response["response"]
         except KeyError as exc:
@@ -173,25 +176,66 @@ def _parse_summary_payload(payload: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise SummarizerError(f"Model did not return valid JSON: {payload[:500]}") from exc
 
-    required = ["summary", "why_it_matters", "topic_tags", "confidence", "next_watch"]
-    missing = [key for key in required if key not in data]
-    if missing:
-        raise SummarizerError(f"Summary payload missing keys {missing}: {data}")
+    summary = str(data.get("summary", data.get("summaery", ""))).strip()
+    if not summary:
+        raise SummarizerError(f"Summary payload missing `summary`: {data}")
 
-    topic_tags = data["topic_tags"]
+    topic_tags = data.get("topic_tags", data.get("keywords", []))
     if not isinstance(topic_tags, list):
         raise SummarizerError(f"`topic_tags` must be a list: {data}")
 
+    normalized_tags = [str(tag).strip() for tag in topic_tags if str(tag).strip()][:6]
+    why_it_matters = str(data.get("why_it_matters", "")).strip()
+    if not why_it_matters:
+        why_it_matters = _fallback_why_it_matters(summary, normalized_tags)
+
+    confidence = str(data.get("confidence", "")).strip().lower()
+    if not confidence:
+        confidence = _fallback_confidence(summary, normalized_tags)
+
+    next_watch = str(data.get("next_watch", "")).strip()
+    if not next_watch:
+        next_watch = _fallback_next_watch(data)
+
     return {
-        "summary": str(data["summary"]).strip(),
-        "why_it_matters": str(data["why_it_matters"]).strip(),
-        "topic_tags": [str(tag).strip() for tag in topic_tags if str(tag).strip()],
-        "confidence": str(data["confidence"]).strip().lower(),
-        "next_watch": str(data["next_watch"]).strip(),
+        "summary": summary,
+        "why_it_matters": why_it_matters,
+        "topic_tags": normalized_tags,
+        "confidence": confidence,
+        "next_watch": next_watch,
     }
 
 
-def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
+def _fallback_why_it_matters(summary: str, topic_tags: list[str]) -> str:
+    if "data center" in summary.casefold() or any("data center" in tag.casefold() for tag in topic_tags):
+        return "This appears directly relevant because the document concerns land-use or approval steps for a data center project."
+    if topic_tags:
+        return f"This appears potentially relevant because it touches land-use or infrastructure topics such as {', '.join(topic_tags[:3])}."
+    return "This may be relevant if it affects land use, infrastructure, or approvals tied to data center development."
+
+
+def _fallback_confidence(summary: str, topic_tags: list[str]) -> str:
+    direct_terms = {"data center", "substation", "transmission line", "zoning amendment", "special exceptions"}
+    haystack = f"{summary} {' '.join(topic_tags)}".casefold()
+    if any(term in haystack for term in direct_terms):
+        return "medium"
+    return "low"
+
+
+def _fallback_next_watch(data: dict[str, Any]) -> str:
+    details = data.get("details")
+    if isinstance(details, list):
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            section = str(detail.get("section", "")).casefold()
+            content = str(detail.get("content", "")).strip()
+            if "timeline" in section and content:
+                return content.split(". ")[0].strip()
+    return "Watch the next public hearing, board action, staff report, or revised filing for this item."
+
+
+def _post_json(url: str, body: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     payload = json.dumps(body).encode("utf-8")
     request = Request(
         url,
@@ -203,7 +247,7 @@ def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=60) as response:
+        with urlopen(request, timeout=timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")

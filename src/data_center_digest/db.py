@@ -74,6 +74,23 @@ CREATE TABLE IF NOT EXISTS document_relevance (
     analyzed_at TEXT NOT NULL,
     FOREIGN KEY (document_id) REFERENCES documents(document_id)
 );
+
+CREATE TABLE IF NOT EXISTS document_summaries (
+    summary_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    model TEXT NOT NULL,
+    summary_path TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    why_it_matters TEXT NOT NULL,
+    topic_tags_json TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    next_watch TEXT NOT NULL,
+    raw_response TEXT NOT NULL,
+    summarized_at TEXT NOT NULL,
+    FOREIGN KEY (document_id) REFERENCES documents(document_id),
+    UNIQUE (document_id, backend, model)
+);
 """
 
 
@@ -305,3 +322,154 @@ def upsert_document_relevance(
         ),
     )
     return False
+
+
+def document_needs_summary(connection: sqlite3.Connection, document_id: str, backend: str, model: str) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1
+        FROM document_summaries
+        WHERE document_id = ? AND backend = ? AND model = ?
+        """,
+        (document_id, backend, model),
+    ).fetchone()
+    return row is None
+
+
+def upsert_document_summary(
+    connection: sqlite3.Connection,
+    document_id: str,
+    backend: str,
+    model: str,
+    summary_path: str,
+    summary: str,
+    why_it_matters: str,
+    topic_tags_json: str,
+    confidence: str,
+    next_watch: str,
+    raw_response: str,
+    summarized_at: str,
+) -> bool:
+    existing = connection.execute(
+        """
+        SELECT summary_id
+        FROM document_summaries
+        WHERE document_id = ? AND backend = ? AND model = ?
+        """,
+        (document_id, backend, model),
+    ).fetchone()
+
+    if existing is None:
+        connection.execute(
+            """
+            INSERT INTO document_summaries (
+                document_id,
+                backend,
+                model,
+                summary_path,
+                summary,
+                why_it_matters,
+                topic_tags_json,
+                confidence,
+                next_watch,
+                raw_response,
+                summarized_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                document_id,
+                backend,
+                model,
+                summary_path,
+                summary,
+                why_it_matters,
+                topic_tags_json,
+                confidence,
+                next_watch,
+                raw_response,
+                summarized_at,
+            ),
+        )
+        return True
+
+    connection.execute(
+        """
+        UPDATE document_summaries
+        SET summary_path = ?, summary = ?, why_it_matters = ?, topic_tags_json = ?, confidence = ?, next_watch = ?, raw_response = ?, summarized_at = ?
+        WHERE document_id = ? AND backend = ? AND model = ?
+        """,
+        (
+            summary_path,
+            summary,
+            why_it_matters,
+            topic_tags_json,
+            confidence,
+            next_watch,
+            raw_response,
+            summarized_at,
+            document_id,
+            backend,
+            model,
+        ),
+    )
+    return False
+
+
+def list_relevant_documents_for_summary(
+    connection: sqlite3.Connection,
+    backend: str,
+    model: str,
+    source_id: str | None = None,
+    limit: int | None = None,
+    include_existing: bool = False,
+) -> list[sqlite3.Row]:
+    params: list[object] = []
+    clauses = [
+        "dr.is_relevant = 1",
+        "dt.extracted_text <> ''",
+    ]
+
+    if not include_existing:
+        params.extend([backend, model])
+        clauses.append(
+            """
+            NOT EXISTS (
+                SELECT 1
+                FROM document_summaries ds
+                WHERE ds.document_id = d.document_id
+                  AND ds.backend = ?
+                  AND ds.model = ?
+            )
+            """.strip()
+        )
+
+    if source_id:
+        clauses.append("i.source_id = ?")
+        params.append(source_id)
+
+    query = f"""
+        SELECT
+            d.document_id,
+            d.title,
+            d.url,
+            d.local_path,
+            dt.text_path,
+            dt.extracted_text,
+            i.title AS meeting_title,
+            i.source_id,
+            s.jurisdiction,
+            dr.score
+        FROM documents d
+        JOIN document_texts dt ON dt.document_id = d.document_id
+        JOIN document_relevance dr ON dr.document_id = d.document_id
+        JOIN items i ON i.item_id = d.item_id
+        JOIN sources s ON s.source_id = i.source_id
+        WHERE {" AND ".join(clauses)}
+        ORDER BY dr.score DESC, d.first_seen_at DESC
+    """
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    return connection.execute(query, params).fetchall()
