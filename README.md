@@ -42,6 +42,30 @@ uv run python scripts/run_once.py --source-id loudoun_bos_meeting_documents
 uv run python scripts/run_once.py --db-path data/app.db --data-dir data
 ```
 
+## Summarization Backends
+
+Use the same prompt and JSON schema with either Gemini or Ollama.
+
+Gemini:
+
+```bash
+export SUMMARY_BACKEND=gemini
+export GEMINI_API_KEY=...
+export GEMINI_MODEL=gemini-2.5-flash-lite
+uv run python scripts/summarize_document.py "data/text/.../Item 11 LEGI-2024-0002_ Concorde Industrial Park.txt"
+```
+
+Ollama:
+
+```bash
+export SUMMARY_BACKEND=ollama
+export OLLAMA_MODEL=qwen3:8b
+export OLLAMA_API_BASE=http://localhost:11434
+uv run python scripts/summarize_document.py "data/text/.../Item 11 LEGI-2024-0002_ Concorde Industrial Park.txt"
+```
+
+The switching logic lives in `src/data_center_digest/summarizer.py`, so the pipeline can change providers without changing the prompt format or output schema.
+
 ## What comes next
 
 After this baseline works:
