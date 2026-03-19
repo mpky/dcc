@@ -73,12 +73,13 @@ def run_laserfiche_source(source: SourceConfig, fetched_at: datetime, data_dir: 
     client = LaserficheClient(user_agent=USER_AGENT)
     discovery = client.discover_meetings(source)
 
-    root_snapshot_path = data_dir / "raw" / source.id / f"{fetched_at.strftime('%Y%m%dT%H%M%SZ')}-root.html"
-    snapshot_hash = save_snapshot(discovery.root_html, root_snapshot_path)
+    stamp = fetched_at.strftime("%Y%m%dT%H%M%SZ")
+    root_snapshot_path = data_dir / "raw" / source.id / f"{stamp}-{discovery.root_artifact.name}.{discovery.root_artifact.extension}"
+    snapshot_hash = save_snapshot(discovery.root_artifact.content, root_snapshot_path)
 
-    for year_title, html_bytes in discovery.year_pages:
-        year_snapshot_path = data_dir / "raw" / source.id / f"{fetched_at.strftime('%Y%m%dT%H%M%SZ')}-{year_title}.html"
-        save_snapshot(html_bytes, year_snapshot_path)
+    for artifact in discovery.year_artifacts:
+        year_snapshot_path = data_dir / "raw" / source.id / f"{stamp}-{artifact.name}.{artifact.extension}"
+        save_snapshot(artifact.content, year_snapshot_path)
 
     discovered = []
     for link in discovery.meetings:

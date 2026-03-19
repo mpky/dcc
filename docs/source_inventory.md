@@ -10,7 +10,7 @@ This file records both active sources and plausible alternatives so source resea
 - Jurisdiction: Loudoun County, VA
 - Scope: Board of Supervisors business meetings, public hearings, and special meetings
 - URL: <https://lfportal.loudoun.gov/LFPortalinternet/0/fol/98907/Row1.aspx>
-- Access pattern: public Laserfiche portal with cookie/login handshake
+- Access pattern: root RSS for year discovery, year RSS for meeting discovery, HTML portal as fallback
 - Why it matters: this is the cleanest source of actual meeting folders and packet PDFs for the first milestone
 - Structure:
   - root folder
@@ -18,8 +18,9 @@ This file records both active sources and plausible alternatives so source resea
   - meeting folders
   - PDFs inside each meeting folder
 - Current use:
-  - monitor newest year folders
-  - track meeting folders as new items
+  - discover newest year folders from root RSS
+  - discover meeting folders from year RSS
+  - fall back to HTML crawling if RSS fails
 
 ## Candidate sources
 

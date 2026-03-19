@@ -5,8 +5,9 @@ import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from http.cookiejar import CookieJar
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener
+import xml.etree.ElementTree as ET
 
 from .config import SourceConfig
 from .html_links import Link, LinkExtractor
@@ -14,12 +15,20 @@ from .html_links import Link, LinkExtractor
 
 YEAR_TITLE_RE = re.compile(r"^\d{4}$")
 MEETING_TITLE_RE = re.compile(r"^\d{2}-\d{2}-\d{2}\b")
+FOLDER_ID_RE = re.compile(r"/fol/(\d+)/Row1\.aspx", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class SnapshotArtifact:
+    name: str
+    extension: str
+    content: bytes
 
 
 @dataclass(frozen=True)
 class LaserficheDiscovery:
-    root_html: bytes
-    year_pages: list[tuple[str, bytes]]
+    root_artifact: SnapshotArtifact
+    year_artifacts: list[SnapshotArtifact]
     meetings: list[Link]
 
 
@@ -91,6 +100,48 @@ def _filter_row_links(base_url: str, html_bytes: bytes) -> list[Link]:
     return links
 
 
+def _extract_folder_id(url: str) -> str:
+    match = FOLDER_ID_RE.search(urlparse(url).path)
+    if not match:
+        raise ValueError(f"Unable to determine Laserfiche folder id from URL: {url}")
+    return match.group(1)
+
+
+def _build_row1_url(folder_id: str) -> str:
+    return f"https://lfportal.loudoun.gov/LFPortalinternet/0/fol/{folder_id}/Row1.aspx"
+
+
+def _build_rss_url(folder_id: str) -> str:
+    return f"https://lfportal.loudoun.gov/LFPortalinternet/rss/dbid/0/folder/{folder_id}/feed.rss"
+
+
+def _rss_item_links(feed_url: str, rss_bytes: bytes) -> list[Link]:
+    root = ET.fromstring(rss_bytes)
+    links: list[Link] = []
+    seen: set[str] = set()
+
+    for item in root.findall("./channel/item"):
+        title = (item.findtext("title") or "").strip()
+        link_text = (item.findtext("link") or "").strip()
+        if not title or not link_text:
+            continue
+
+        absolute_link = urljoin(feed_url, link_text)
+        parsed = urlparse(absolute_link)
+        query = parse_qs(parsed.query)
+        start_ids = query.get("startid")
+        if not start_ids:
+            continue
+
+        row1_url = _build_row1_url(start_ids[0])
+        if row1_url in seen:
+            continue
+        seen.add(row1_url)
+        links.append(Link(title=title, url=row1_url))
+
+    return links
+
+
 class LaserficheClient:
     def __init__(self, user_agent: str) -> None:
         cookie_jar = CookieJar()
@@ -113,7 +164,41 @@ class LaserficheClient:
         payload = urlencode(parser.fields).encode("utf-8")
         self.fetch(post_url, data=payload)
 
-    def discover_meetings(self, source: SourceConfig) -> LaserficheDiscovery:
+    def _discover_via_rss(self, source: SourceConfig) -> LaserficheDiscovery:
+        settings = source.settings or {}
+        year_count = int(settings.get("year_count", 1))
+        root_folder_id = _extract_folder_id(source.url)
+        root_rss_url = str(settings.get("root_rss_url") or _build_rss_url(root_folder_id))
+        root_rss = self.fetch(root_rss_url)
+        root_links = _rss_item_links(root_rss_url, root_rss)
+
+        year_links = [link for link in root_links if YEAR_TITLE_RE.fullmatch(link.title)]
+        year_links = sorted(year_links, key=lambda link: int(link.title), reverse=True)[:year_count]
+        if not year_links:
+            raise RuntimeError("Laserfiche root RSS did not expose any year folders.")
+
+        year_artifacts: list[SnapshotArtifact] = []
+        meetings: list[Link] = []
+        seen_meeting_urls: set[str] = set()
+
+        for year_link in year_links:
+            year_folder_id = _extract_folder_id(year_link.url)
+            year_rss_url = _build_rss_url(year_folder_id)
+            year_rss = self.fetch(year_rss_url)
+            year_artifacts.append(SnapshotArtifact(name=year_link.title, extension="rss", content=year_rss))
+            for link in _rss_item_links(year_rss_url, year_rss):
+                if MEETING_TITLE_RE.match(link.title) and link.url not in seen_meeting_urls:
+                    seen_meeting_urls.add(link.url)
+                    meetings.append(link)
+
+        meetings.sort(key=_meeting_sort_key, reverse=True)
+        return LaserficheDiscovery(
+            root_artifact=SnapshotArtifact(name="root", extension="rss", content=root_rss),
+            year_artifacts=year_artifacts,
+            meetings=meetings,
+        )
+
+    def _discover_via_html(self, source: SourceConfig) -> LaserficheDiscovery:
         settings = source.settings or {}
         login_url = str(settings.get("login_url", ""))
         year_count = int(settings.get("year_count", 1))
@@ -127,13 +212,13 @@ class LaserficheClient:
         year_links = [link for link in root_links if YEAR_TITLE_RE.fullmatch(link.title)]
         year_links = sorted(year_links, key=lambda link: int(link.title), reverse=True)[:year_count]
 
-        year_pages: list[tuple[str, bytes]] = []
+        year_artifacts: list[SnapshotArtifact] = []
         meetings: list[Link] = []
         seen_meeting_urls: set[str] = set()
 
         for year_link in year_links:
             year_html = self.fetch(year_link.url)
-            year_pages.append((year_link.title, year_html))
+            year_artifacts.append(SnapshotArtifact(name=year_link.title, extension="html", content=year_html))
             for link in _filter_row_links(year_link.url, year_html):
                 if not MEETING_TITLE_RE.match(link.title):
                     continue
@@ -143,7 +228,17 @@ class LaserficheClient:
                 meetings.append(link)
 
         meetings.sort(key=_meeting_sort_key, reverse=True)
-        return LaserficheDiscovery(root_html=root_html, year_pages=year_pages, meetings=meetings)
+        return LaserficheDiscovery(
+            root_artifact=SnapshotArtifact(name="root", extension="html", content=root_html),
+            year_artifacts=year_artifacts,
+            meetings=meetings,
+        )
+
+    def discover_meetings(self, source: SourceConfig) -> LaserficheDiscovery:
+        try:
+            return self._discover_via_rss(source)
+        except Exception:
+            return self._discover_via_html(source)
 
 
 def _meeting_sort_key(link: Link) -> tuple[datetime, str]:
