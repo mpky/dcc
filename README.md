@@ -8,6 +8,7 @@ Track the Loudoun County Board of Supervisors business-meeting packet repository
 
 - source feed snapshots saved on each run
 - extracted meeting folders stored in SQLite
+- PDFs from newly discovered meeting folders downloaded locally
 - new meeting entries reported on stdout
 
 This is intentionally smaller than keyword filtering, summarization, or email delivery. The immediate goal is proving that one source is stable and can be monitored idempotently.
@@ -43,7 +44,6 @@ python3 scripts/run_once.py --db-path data/app.db --data-dir data
 
 After this baseline works:
 
-1. download PDFs within new meeting folders
-2. add keyword relevance filtering
-3. add item-body parsing for PDFs
-4. add email notifications
+1. add keyword relevance filtering
+2. add item-body parsing for PDFs
+3. add email notifications

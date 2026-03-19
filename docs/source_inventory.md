@@ -20,6 +20,8 @@ This file records both active sources and plausible alternatives so source resea
 - Current use:
   - discover newest year folders from root RSS
   - discover meeting folders from year RSS
+  - fetch meeting-folder HTML when a new meeting appears
+  - download PDFs linked from the new meeting folder
   - fall back to HTML crawling if RSS fails
 
 ## Candidate sources

@@ -4,12 +4,14 @@ import argparse
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
+import re
+from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .config import SourceConfig, load_sources
-from .db import connect, record_source_run, upsert_item, upsert_source
+from .db import connect, record_source_run, upsert_document, upsert_item, upsert_source
 from .html_links import LinkExtractor, filter_links
-from .laserfiche import LaserficheClient
+from .laserfiche import LaserficheClient, extract_folder_id
 
 
 DEFAULT_CONFIG_PATH = Path("config/sources.json")
@@ -24,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--source-id", help="Limit execution to a single source id.")
+    parser.add_argument("--document-download-limit", type=int, help="Limit document expansion to the first N new meeting folders.")
     return parser.parse_args()
 
 
@@ -42,6 +45,17 @@ def save_snapshot(content: bytes, path: Path) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
     return hashlib.sha256(content).hexdigest()
+
+
+def save_binary(content: bytes, path: Path) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return hashlib.sha256(content).hexdigest()
+
+
+def safe_filename(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip()
+    return cleaned or "document.pdf"
 
 
 def discover_links(source: SourceConfig, html_bytes: bytes) -> list[tuple[str, str, str]]:
@@ -89,7 +103,51 @@ def run_laserfiche_source(source: SourceConfig, fetched_at: datetime, data_dir: 
     return root_snapshot_path, snapshot_hash, discovered
 
 
-def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path) -> None:
+def collect_documents_for_new_laserfiche_items(
+    source: SourceConfig,
+    new_items: list[tuple[str, str, str]],
+    fetched_at: datetime,
+    data_dir: Path,
+    connection,
+    document_download_limit: int | None,
+) -> int:
+    if not new_items:
+        return 0
+
+    items_to_process = new_items[:document_download_limit] if document_download_limit is not None else new_items
+    client = LaserficheClient(user_agent=USER_AGENT)
+    stamp = fetched_at.strftime("%Y%m%dT%H%M%SZ")
+    new_documents = 0
+
+    for item_id, _, meeting_url in items_to_process:
+        artifact, pdf_links = client.fetch_meeting_documents(source, meeting_url)
+        meeting_folder_id = extract_folder_id(meeting_url)
+        snapshot_path = data_dir / "raw" / source.id / f"{stamp}-{artifact.name}.{artifact.extension}"
+        save_snapshot(artifact.content, snapshot_path)
+
+        for pdf_link in pdf_links:
+            file_name = Path(unquote(urlparse(pdf_link.url).path)).name
+            local_path = data_dir / "items" / source.id / meeting_folder_id / safe_filename(file_name)
+            pdf_bytes = client.fetch(pdf_link.url)
+            pdf_hash = save_binary(pdf_bytes, local_path)
+            document_id = hashlib.sha256(pdf_link.url.encode("utf-8")).hexdigest()
+            is_new = upsert_document(
+                connection,
+                document_id=document_id,
+                item_id=item_id,
+                title=pdf_link.title,
+                url=pdf_link.url,
+                local_path=str(local_path),
+                sha256=pdf_hash,
+                seen_at=fetched_at.isoformat(),
+            )
+            if is_new:
+                new_documents += 1
+
+    return new_documents
+
+
+def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path, document_download_limit: int | None = None) -> None:
     fetched_at = datetime.now(UTC)
     if source.kind == "laserfiche_meeting_folders":
         snapshot_path, snapshot_hash, discovered = run_laserfiche_source(source, fetched_at, data_dir)
@@ -109,6 +167,7 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path) -> None:
         )
 
         new_items: list[tuple[str, str]] = []
+        new_item_records: list[tuple[str, str, str]] = []
         for item_id, title, url in discovered:
             is_new = upsert_item(
                 connection,
@@ -120,6 +179,18 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path) -> None:
             )
             if is_new:
                 new_items.append((title, url))
+                new_item_records.append((item_id, title, url))
+
+        new_documents = 0
+        if source.kind == "laserfiche_meeting_folders":
+            new_documents = collect_documents_for_new_laserfiche_items(
+                source,
+                new_item_records,
+                fetched_at,
+                data_dir,
+                connection,
+                document_download_limit=document_download_limit,
+            )
 
         connection.commit()
     finally:
@@ -129,6 +200,8 @@ def run_for_source(source: SourceConfig, db_path: Path, data_dir: Path) -> None:
     print(f"snapshot={snapshot_path}")
     print(f"discovered_links={len(discovered)}")
     print(f"new_items={len(new_items)}")
+    if source.kind == "laserfiche_meeting_folders":
+        print(f"new_documents={new_documents}")
     for title, url in new_items[:10]:
         print(f"- {title} -> {url}")
 
@@ -142,7 +215,12 @@ def main() -> None:
         raise SystemExit("No sources matched the requested source id.")
 
     for source in sources:
-        run_for_source(source, db_path=args.db_path, data_dir=args.data_dir)
+        run_for_source(
+            source,
+            db_path=args.db_path,
+            data_dir=args.data_dir,
+            document_download_limit=args.document_download_limit,
+        )
 
 
 if __name__ == "__main__":

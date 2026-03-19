@@ -32,6 +32,18 @@ CREATE TABLE IF NOT EXISTS items (
     last_seen_at TEXT NOT NULL,
     FOREIGN KEY (source_id) REFERENCES sources(source_id)
 );
+
+CREATE TABLE IF NOT EXISTS documents (
+    document_id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    local_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    downloaded_at TEXT NOT NULL,
+    FOREIGN KEY (item_id) REFERENCES items(item_id)
+);
 """
 
 
@@ -98,5 +110,41 @@ def upsert_item(connection: sqlite3.Connection, item_id: str, source_id: str, ti
         WHERE item_id = ?
         """,
         (title, url, seen_at, item_id),
+    )
+    return False
+
+
+def upsert_document(
+    connection: sqlite3.Connection,
+    document_id: str,
+    item_id: str,
+    title: str,
+    url: str,
+    local_path: str,
+    sha256: str,
+    seen_at: str,
+) -> bool:
+    existing = connection.execute(
+        "SELECT document_id FROM documents WHERE document_id = ?",
+        (document_id,),
+    ).fetchone()
+
+    if existing is None:
+        connection.execute(
+            """
+            INSERT INTO documents (document_id, item_id, title, url, local_path, sha256, first_seen_at, downloaded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (document_id, item_id, title, url, local_path, sha256, seen_at, seen_at),
+        )
+        return True
+
+    connection.execute(
+        """
+        UPDATE documents
+        SET title = ?, url = ?, local_path = ?, sha256 = ?, downloaded_at = ?
+        WHERE document_id = ?
+        """,
+        (title, url, local_path, sha256, seen_at, document_id),
     )
     return False

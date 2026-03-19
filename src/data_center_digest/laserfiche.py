@@ -100,7 +100,31 @@ def _filter_row_links(base_url: str, html_bytes: bytes) -> list[Link]:
     return links
 
 
-def _extract_folder_id(url: str) -> str:
+def _pdf_links(base_url: str, html_bytes: bytes) -> list[Link]:
+    extractor = LinkExtractor(base_url=base_url)
+    extractor.feed(html_bytes.decode("utf-8", errors="ignore"))
+    links: list[Link] = []
+    seen: set[str] = set()
+
+    for link in extractor.links:
+        title = link.title.replace("[Icon]", "").strip()
+        parsed = urlparse(link.url)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        if parsed.netloc != "lfportal.loudoun.gov":
+            continue
+        if not parsed.path.lower().endswith(".pdf"):
+            continue
+        if link.url in seen:
+            continue
+        seen.add(link.url)
+        links.append(Link(title=title or link.url, url=link.url))
+
+    links.sort(key=lambda link: link.title)
+    return links
+
+
+def extract_folder_id(url: str) -> str:
     match = FOLDER_ID_RE.search(urlparse(url).path)
     if not match:
         raise ValueError(f"Unable to determine Laserfiche folder id from URL: {url}")
@@ -147,6 +171,7 @@ class LaserficheClient:
         cookie_jar = CookieJar()
         self.opener = build_opener(HTTPCookieProcessor(cookie_jar))
         self.user_agent = user_agent
+        self.logged_in = False
 
     def fetch(self, url: str, data: bytes | None = None) -> bytes:
         request = Request(url, data=data, headers={"User-Agent": self.user_agent})
@@ -154,6 +179,8 @@ class LaserficheClient:
             return response.read()
 
     def login(self, login_url: str) -> None:
+        if self.logged_in:
+            return
         welcome_html = self.fetch(login_url)
         parser = LoginFormParser()
         parser.feed(welcome_html.decode("utf-8", errors="ignore"))
@@ -163,11 +190,19 @@ class LaserficheClient:
         post_url = urljoin(login_url, parser.form_action)
         payload = urlencode(parser.fields).encode("utf-8")
         self.fetch(post_url, data=payload)
+        self.logged_in = True
+
+    def _login_url(self, source: SourceConfig) -> str:
+        settings = source.settings or {}
+        login_url = str(settings.get("login_url", ""))
+        if not login_url:
+            raise RuntimeError("Laserfiche source is missing login_url in settings.")
+        return login_url
 
     def _discover_via_rss(self, source: SourceConfig) -> LaserficheDiscovery:
         settings = source.settings or {}
         year_count = int(settings.get("year_count", 1))
-        root_folder_id = _extract_folder_id(source.url)
+        root_folder_id = extract_folder_id(source.url)
         root_rss_url = str(settings.get("root_rss_url") or _build_rss_url(root_folder_id))
         root_rss = self.fetch(root_rss_url)
         root_links = _rss_item_links(root_rss_url, root_rss)
@@ -182,7 +217,7 @@ class LaserficheClient:
         seen_meeting_urls: set[str] = set()
 
         for year_link in year_links:
-            year_folder_id = _extract_folder_id(year_link.url)
+            year_folder_id = extract_folder_id(year_link.url)
             year_rss_url = _build_rss_url(year_folder_id)
             year_rss = self.fetch(year_rss_url)
             year_artifacts.append(SnapshotArtifact(name=year_link.title, extension="rss", content=year_rss))
@@ -200,12 +235,8 @@ class LaserficheClient:
 
     def _discover_via_html(self, source: SourceConfig) -> LaserficheDiscovery:
         settings = source.settings or {}
-        login_url = str(settings.get("login_url", ""))
         year_count = int(settings.get("year_count", 1))
-        if not login_url:
-            raise RuntimeError("Laserfiche source is missing login_url in settings.")
-
-        self.login(login_url)
+        self.login(self._login_url(source))
         root_html = self.fetch(source.url)
         root_links = _filter_row_links(source.url, root_html)
 
@@ -239,6 +270,13 @@ class LaserficheClient:
             return self._discover_via_rss(source)
         except Exception:
             return self._discover_via_html(source)
+
+    def fetch_meeting_documents(self, source: SourceConfig, meeting_url: str) -> tuple[SnapshotArtifact, list[Link]]:
+        self.login(self._login_url(source))
+        meeting_html = self.fetch(meeting_url)
+        folder_id = extract_folder_id(meeting_url)
+        artifact = SnapshotArtifact(name=f"meeting-{folder_id}", extension="html", content=meeting_html)
+        return artifact, _pdf_links(meeting_url, meeting_html)
 
 
 def _meeting_sort_key(link: Link) -> tuple[datetime, str]:
