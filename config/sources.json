@@ -2,35 +2,19 @@
   "sources": [
     {
       "id": "loudoun_bos_meeting_documents",
-      "name": "Loudoun County Board of Supervisors Meeting Documents",
+      "name": "Loudoun County Board of Supervisors Business Meetings, Public Hearings, & Special Meetings",
       "jurisdiction": "Loudoun County, VA",
-      "kind": "html_index",
-      "url": "https://www.loudoun.gov/4829/Board-of-Supervisors-Meeting-Documents",
+      "kind": "laserfiche_meeting_folders",
+      "url": "https://lfportal.loudoun.gov/LFPortalinternet/0/fol/98907/Row1.aspx",
       "allowed_domains": [
-        "loudoun.gov",
-        "loudoun.granicus.com"
+        "lfportal.loudoun.gov"
       ],
-      "include_patterns": [
-        "agenda",
-        "packet",
-        "meeting",
-        "hearing",
-        "committee",
-        "document",
-        "archive",
-        "budget",
-        "legislative"
-      ],
-      "exclude_patterns": [
-        "skip to main content",
-        "facebook.com",
-        "twitter.com",
-        "youtube.com",
-        "nextdoor.com",
-        "bsky.app",
-        "mailto:",
-        "javascript:"
-      ]
+      "include_patterns": [],
+      "exclude_patterns": [],
+      "settings": {
+        "login_url": "https://lfportal.loudoun.gov/LFPortalInternet/Welcome.aspx",
+        "year_count": 2
+      }
     }
   ]
 }
