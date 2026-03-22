@@ -83,12 +83,14 @@ def summary_path_for(
     data_dir: Path,
     source_id: str,
     meeting_folder_id: str,
+    document_id: str,
     document_title: str,
     backend: str,
     model: str,
 ) -> Path:
     model_slug = safe_filename(model.replace(":", "-"))
-    file_name = safe_filename(f"{Path(document_title).stem}.{backend}.{model_slug}.json")
+    document_slug = safe_filename(document_id[:12])
+    file_name = safe_filename(f"{Path(document_title).stem}.{document_slug}.{backend}.{model_slug}.json")
     return data_dir / "summaries" / source_id / meeting_folder_id / file_name
 
 
@@ -274,6 +276,7 @@ def collect_documents_for_new_laserfiche_items(
                             data_dir=data_dir,
                             source_id=source.id,
                             meeting_folder_id=meeting_folder_id,
+                            document_id=document_id,
                             document_title=pdf_link.title,
                             backend=summary_result.backend,
                             model=summary_result.model,

@@ -153,6 +153,7 @@ def main() -> None:
                 data_dir=args.data_dir,
                 source_id=row["source_id"],
                 meeting_folder_id=meeting_folder_id,
+                document_id=row["document_id"],
                 document_title=row["title"],
                 backend=result.backend,
                 model=result.model,

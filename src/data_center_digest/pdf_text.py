@@ -81,7 +81,10 @@ class PDFTextExtractor:
     def _ocr_with_tesseract(self, image: Image.Image) -> str:
         grayscale = image.convert("L")
         try:
-            text = pytesseract.image_to_string(grayscale)
+            try:
+                text = pytesseract.image_to_string(grayscale)
+            except pytesseract.TesseractNotFoundError:
+                return ""
         finally:
             grayscale.close()
         return self._normalize(text)
