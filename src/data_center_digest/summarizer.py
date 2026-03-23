@@ -176,7 +176,18 @@ def _parse_summary_payload(payload: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise SummarizerError(f"Model did not return valid JSON: {payload[:500]}") from exc
 
-    summary = str(data.get("summary", data.get("summaery", ""))).strip()
+    summary = str(
+        data.get(
+            "summary",
+            data.get(
+                "summaery",
+                data.get(
+                    "summaary",
+                    data.get("answer", ""),
+                ),
+            ),
+        )
+    ).strip()
     if not summary:
         raise SummarizerError(f"Summary payload missing `summary`: {data}")
 
@@ -185,7 +196,7 @@ def _parse_summary_payload(payload: str) -> dict[str, Any]:
         raise SummarizerError(f"`topic_tags` must be a list: {data}")
 
     normalized_tags = [str(tag).strip() for tag in topic_tags if str(tag).strip()][:6]
-    why_it_matters = str(data.get("why_it_matters", "")).strip()
+    why_it_matters = str(data.get("why_it_matters", data.get("why_it_matteers", ""))).strip()
     if not why_it_matters:
         why_it_matters = _fallback_why_it_matters(summary, normalized_tags)
 

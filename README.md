@@ -52,6 +52,7 @@ The public Loudoun page embeds this Laserfiche folder. The scraper now uses the 
 - `scripts/run_once.py`: one-source ingest entrypoint
 - `scripts/summarize_document.py`: ad hoc document summary CLI
 - `scripts/summarize_relevant_documents.py`: backfill summaries from stored relevant documents
+- `scripts/validate_gemini_live.py`: live Gemini validation on the sample corpus
 - `src/data_center_digest/`: application code
 
 ## Local run
@@ -120,10 +121,21 @@ export GEMINI_API_KEY=...
 uv run python scripts/summarize_relevant_documents.py --source-id loudoun_bos_meeting_documents --limit 5
 ```
 
+Run a focused live Gemini validation pass on the three sample land-use documents:
+
+```bash
+export SUMMARY_BACKEND=gemini
+export GEMINI_API_KEY=...
+export GEMINI_MODEL=gemini-2.5-flash-lite
+uv run python scripts/validate_gemini_live.py
+```
+
+This writes a JSON report under `data/evals/gemini_live_validation.json` with per-document latency, success/failure, and the normalized summary payload.
+
 ## What comes next
 
 After this baseline works:
 
 1. tune keyword relevance filtering with real false positives/negatives
 2. add digest assembly and email notifications
-3. tune summary prompts and excerpt selection for large packets
+3. validate Gemini live on the sample corpus and compare it against the local Ollama baseline
