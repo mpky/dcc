@@ -156,15 +156,22 @@ def build_summary_prompt(request: SummaryRequest) -> str:
     return (
         "You summarize public-government documents for a legal-news digest about data centers.\n"
         "Return valid JSON only. Do not include markdown fences.\n"
-        "Be factual. If relevance to data centers is indirect, say so explicitly.\n"
+        "Use only facts supported by the document text and metadata.\n"
+        "Do not infer missing facts, motives, outcomes, or project details that are not stated.\n"
+        "If relevance to data centers is indirect, say so explicitly.\n"
+        "If the document text appears noisy, partial, or OCR-derived, lower confidence accordingly.\n"
         "Use this JSON shape:\n"
         f"{json.dumps(DEFAULT_SUMMARY_SCHEMA, indent=2)}\n\n"
-        "Guidance:\n"
+        "Task guidance:\n"
         "- Focus on zoning, land use, utilities, substations, transmission, tax, permitting, and industrial development.\n"
+        "- Prefer concrete government actions such as hearings, votes, ordinances, rezonings, special exceptions, staff recommendations, proffers, and utility approvals.\n"
+        "- Ignore boilerplate, template language, contact blocks, generic agenda mechanics, and legal formalities unless they are central to the document.\n"
         "- `why_it_matters` should connect the document to data centers only when justified by the text.\n"
-        "- `topic_tags` should be 3-6 short tags.\n"
-        "- `confidence` should reflect how directly the document supports the summary.\n"
-        "- `next_watch` should mention the next public process step when one is apparent.\n\n"
+        "- `summary` should be 2-4 concise sentences focused on what the government action or proposal is.\n"
+        "- `topic_tags` should be 3-6 short lower-case tags.\n"
+        "- `confidence` should reflect both document clarity and how directly the text supports the summary.\n"
+        "- `next_watch` should mention the next public process step when one is apparent; otherwise use a short watch-item note.\n"
+        "- When the document is not clearly about data centers, say that plainly instead of stretching the connection.\n\n"
         f"Metadata:\n{json.dumps(metadata, indent=2)}\n\n"
         f"Document text:\n{trimmed_text}\n"
     )
@@ -176,7 +183,18 @@ def _parse_summary_payload(payload: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise SummarizerError(f"Model did not return valid JSON: {payload[:500]}") from exc
 
-    summary = str(data.get("summary", data.get("summaery", ""))).strip()
+    summary = str(
+        data.get(
+            "summary",
+            data.get(
+                "summaery",
+                data.get(
+                    "summaary",
+                    "",
+                ),
+            ),
+        )
+    ).strip()
     if not summary:
         raise SummarizerError(f"Summary payload missing `summary`: {data}")
 
@@ -185,7 +203,7 @@ def _parse_summary_payload(payload: str) -> dict[str, Any]:
         raise SummarizerError(f"`topic_tags` must be a list: {data}")
 
     normalized_tags = [str(tag).strip() for tag in topic_tags if str(tag).strip()][:6]
-    why_it_matters = str(data.get("why_it_matters", "")).strip()
+    why_it_matters = str(data.get("why_it_matters", data.get("why_it_matteers", ""))).strip()
     if not why_it_matters:
         why_it_matters = _fallback_why_it_matters(summary, normalized_tags)
 
