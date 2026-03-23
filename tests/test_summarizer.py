@@ -54,25 +54,15 @@ class ParseSummaryPayloadTests(unittest.TestCase):
         self.assertEqual(result["confidence"], "high")
         self.assertEqual(result["next_watch"], "Watch the next public hearing.")
 
-    def test_accepts_answer_field_as_summary_fallback(self) -> None:
+    def test_rejects_answer_only_payload(self) -> None:
         payload = json.dumps(
             {
                 "answer": "This ordinance vacates a landscape buffer easement for a residential lot.",
             }
         )
 
-        result = _parse_summary_payload(payload)
-
-        self.assertEqual(
-            result["summary"],
-            "This ordinance vacates a landscape buffer easement for a residential lot.",
-        )
-        self.assertEqual(result["confidence"], "low")
-        self.assertIn("land use", result["why_it_matters"])
-        self.assertEqual(
-            result["next_watch"],
-            "Watch the next public hearing, board action, staff report, or revised filing for this item.",
-        )
+        with self.assertRaises(SummarizerError):
+            _parse_summary_payload(payload)
 
     def test_rejects_non_json_payload(self) -> None:
         with self.assertRaises(SummarizerError):

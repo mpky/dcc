@@ -190,7 +190,7 @@ def _parse_summary_payload(payload: str) -> dict[str, Any]:
                 "summaery",
                 data.get(
                     "summaary",
-                    data.get("answer", ""),
+                    "",
                 ),
             ),
         )

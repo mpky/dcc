@@ -43,21 +43,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_docs(requested_docs: list[Path]) -> list[Path]:
+    missing = [path for path in requested_docs if not path.exists()]
+    if not missing:
+        return requested_docs
+
+    missing_list = "\n".join(f"- {path}" for path in missing)
+    raise SystemExit(
+        "Validation sample documents are missing.\n"
+        "Run the ingestion pipeline first to populate `data/text/...`, or pass explicit `--docs` paths.\n"
+        f"Missing paths:\n{missing_list}"
+    )
+
+
 def main() -> None:
     args = parse_args()
     summarizer = Summarizer.from_env()
     if summarizer.config.backend != "gemini":
         raise SystemExit("Set SUMMARY_BACKEND=gemini before running this script.")
+    docs = resolve_docs(args.docs)
 
     started_at = datetime.now(UTC).isoformat()
     results: list[dict[str, object]] = []
-    total_runs = len(args.docs)
+    total_runs = len(docs)
     print(
         f"backend={summarizer.config.backend} "
         f"model={summarizer.config.model} docs={total_runs}"
     )
 
-    for index, doc_path in enumerate(args.docs, start=1):
+    for index, doc_path in enumerate(docs, start=1):
         text = doc_path.read_text(encoding="utf-8", errors="ignore")
         request = SummaryRequest(
             title=doc_path.stem,
@@ -104,7 +118,7 @@ def main() -> None:
                 "started_at": started_at,
                 "backend": summarizer.config.backend,
                 "model": summarizer.config.model,
-                "documents": [str(path) for path in args.docs],
+                "documents": [str(path) for path in docs],
                 "max_input_chars": args.max_input_chars,
                 "results": results,
             },
