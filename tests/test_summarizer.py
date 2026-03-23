@@ -10,6 +10,7 @@ from data_center_digest.summarizer import (
     Summarizer,
     SummarizerConfig,
     SummarizerError,
+    build_summary_prompt,
     _parse_summary_payload,
 )
 
@@ -76,6 +77,41 @@ class ParseSummaryPayloadTests(unittest.TestCase):
     def test_rejects_non_json_payload(self) -> None:
         with self.assertRaises(SummarizerError):
             _parse_summary_payload("not-json")
+
+
+class BuildSummaryPromptTests(unittest.TestCase):
+    def test_prompt_includes_core_guardrails_for_legal_digest_task(self) -> None:
+        prompt = build_summary_prompt(
+            SummaryRequest(
+                title="Concorde Industrial Park",
+                text="This is a sample rezoning text.",
+                jurisdiction="Loudoun County, VA",
+                meeting_title="03-17-26 Business Meeting",
+                source_url="https://example.invalid/doc.pdf",
+                max_input_chars=50,
+            )
+        )
+
+        self.assertIn("Use only facts supported by the document text and metadata.", prompt)
+        self.assertIn("Do not infer missing facts", prompt)
+        self.assertIn("Ignore boilerplate", prompt)
+        self.assertIn("OCR", prompt)
+        self.assertIn("zoning, land use, utilities, substations, transmission", prompt)
+        self.assertIn('"title": "Concorde Industrial Park"', prompt)
+        self.assertIn("This is a sample rezoning text.", prompt)
+
+    def test_prompt_trims_document_text_to_max_input_chars(self) -> None:
+        prompt = build_summary_prompt(
+            SummaryRequest(
+                title="Title",
+                text="abcdefghijklmnopqrstuvwxyz",
+                jurisdiction="Loudoun County, VA",
+                max_input_chars=10,
+            )
+        )
+
+        self.assertIn("abcdefghij", prompt)
+        self.assertNotIn("klmnopqrstuvwxyz", prompt)
 
 
 class GeminiSummarizerTests(unittest.TestCase):
