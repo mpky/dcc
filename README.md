@@ -53,6 +53,7 @@ The public Loudoun page embeds this Laserfiche folder. The scraper now uses the 
 - `scripts/summarize_document.py`: ad hoc document summary CLI
 - `scripts/summarize_relevant_documents.py`: backfill summaries from stored relevant documents
 - `scripts/validate_gemini_live.py`: live Gemini validation on the sample corpus
+- `scripts/build_digest.py`: build a local Markdown digest from summarized relevant documents
 - `src/data_center_digest/`: application code
 
 ## Local run
@@ -74,6 +75,7 @@ Useful one-off checks:
 ```bash
 uv run python -m py_compile src/data_center_digest/*.py scripts/*.py
 uv run python scripts/run_once.py --source-id loudoun_bos_meeting_documents --document-download-limit 1
+uv run python scripts/build_digest.py --source-id loudoun_bos_meeting_documents --limit 10
 ```
 
 ## Pipeline stages
@@ -86,6 +88,7 @@ uv run python scripts/run_once.py --source-id loudoun_bos_meeting_documents --do
 6. `relevance.py` scores extracted text for data-center-adjacent signals.
 7. `summarizer.py` can summarize relevant text with Gemini or Ollama.
 8. Summary JSON is stored in SQLite and written under `data/summaries/...`.
+9. `build_digest.py` renders recent summarized documents into a Markdown digest under `data/digests/...`.
 
 ## Summarization Backends
 
@@ -144,10 +147,26 @@ uv run python scripts/validate_gemini_live.py \
 
 This writes a JSON report under `data/evals/gemini_live_validation.json` with per-document latency, success/failure, and the normalized summary payload.
 
+## Digest Assembly
+
+Build a local Markdown digest from the most recent summarized relevant documents:
+
+```bash
+uv run python scripts/build_digest.py --source-id loudoun_bos_meeting_documents --limit 10
+```
+
+Optional filters:
+
+```bash
+uv run python scripts/build_digest.py --backend gemini --model gemini-2.5-flash-lite --limit 5
+```
+
+The digest is written under `data/digests/...` and groups entries by meeting with summary, why-it-matters, tags, confidence, and next-watch notes.
+
 ## What comes next
 
 After this baseline works:
 
 1. tune keyword relevance filtering with real false positives/negatives
-2. add digest assembly and email notifications
-3. validate Gemini live on the sample corpus and compare it against the local Ollama baseline
+2. add HTML/email rendering and delivery on top of the Markdown digest artifact
+3. compare Gemini and Ollama summary outputs more systematically before choosing the production default
