@@ -11,11 +11,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from data_center_digest.db import connect, list_digest_entries
-from data_center_digest.digest import render_markdown_digest
+from data_center_digest.digest import render_html_digest, render_markdown_digest
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build a local Markdown digest from recent summarized documents.")
+    parser = argparse.ArgumentParser(description="Build local Markdown and HTML digests from recent summarized documents.")
     parser.add_argument("--db-path", type=Path, default=ROOT / "data" / "app.db")
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--source-id", help="Limit the digest to one source id.")
@@ -30,6 +30,10 @@ def default_output_path(*, data_dir: Path, source_id: str | None, generated_at: 
     stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
     label = source_id or "all_sources"
     return data_dir / "digests" / label / f"{stamp}.md"
+
+
+def html_output_path(markdown_path: Path) -> Path:
+    return markdown_path.with_suffix(".html")
 
 
 def source_label_for(entries: list[dict], source_id: str | None) -> str:
@@ -65,17 +69,25 @@ def main() -> None:
         generated_at=generated_at,
         source_label=source_label_for(entries, args.source_id),
     )
+    html = render_html_digest(
+        entries=entries,
+        generated_at=generated_at,
+        source_label=source_label_for(entries, args.source_id),
+    )
 
-    output_path = args.output_path or default_output_path(
+    markdown_output_path = args.output_path or default_output_path(
         data_dir=args.data_dir,
         source_id=args.source_id,
         generated_at=generated_at,
     )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(markdown, encoding="utf-8")
+    html_output = html_output_path(markdown_output_path)
+    markdown_output_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_output_path.write_text(markdown, encoding="utf-8")
+    html_output.write_text(html, encoding="utf-8")
 
     print(f"entries={len(entries)}")
-    print(f"output_path={output_path}")
+    print(f"markdown_output_path={markdown_output_path}")
+    print(f"html_output_path={html_output}")
 
 
 if __name__ == "__main__":

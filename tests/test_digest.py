@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from data_center_digest.db import connect, list_digest_entries
-from data_center_digest.digest import render_markdown_digest
+from data_center_digest.digest import render_html_digest, render_markdown_digest
 
 
 class DigestQueryTests(unittest.TestCase):
@@ -136,6 +136,41 @@ class DigestRenderTests(unittest.TestCase):
         self.assertIn("[Concorde Industrial Park.pdf](https://example.invalid/doc-1.pdf)", markdown)
         self.assertIn("Why it matters: This directly affects data center siting and utility approvals.", markdown)
         self.assertIn("Tags: `data center`, `zoning`", markdown)
+
+    def test_render_html_digest_outputs_email_friendly_sections(self) -> None:
+        entries = [
+            {
+                "meeting_title": "03-17-26 Business Meeting",
+                "meeting_url": "https://example.invalid/meeting-1",
+                "document_title": "Concorde Industrial Park.pdf",
+                "document_url": "https://example.invalid/doc-1.pdf",
+                "summary": "A rezoning and special-exception request for a data center project.",
+                "why_it_matters": "This directly affects data center siting and utility approvals.",
+                "topic_tags": ["data center", "zoning"],
+                "confidence": "high",
+                "next_watch": "Watch the next board vote.",
+                "jurisdiction": "Loudoun County, VA",
+                "source_name": "Loudoun BOS",
+                "backend": "gemini",
+                "model": "gemini-2.5-flash-lite",
+                "score": 28,
+            }
+        ]
+
+        html = render_html_digest(
+            entries=entries,
+            generated_at=datetime(2026, 3, 23, 10, 30, tzinfo=UTC),
+            source_label="Loudoun County, VA",
+        )
+
+        self.assertIn("<html", html)
+        self.assertIn("Data Center Legal Digest", html)
+        self.assertIn("03-17-26 Business Meeting", html)
+        self.assertIn('href="https://example.invalid/meeting-1"', html)
+        self.assertIn('href="https://example.invalid/doc-1.pdf"', html)
+        self.assertIn("Why it matters", html)
+        self.assertIn("Confidence", html)
+        self.assertIn("data center", html)
 
 
 if __name__ == "__main__":
