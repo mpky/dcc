@@ -473,3 +473,72 @@ def list_relevant_documents_for_summary(
         params.append(limit)
 
     return connection.execute(query, params).fetchall()
+
+
+def list_digest_entries(
+    connection: sqlite3.Connection,
+    source_id: str | None = None,
+    backend: str | None = None,
+    model: str | None = None,
+    limit: int | None = 10,
+) -> list[sqlite3.Row]:
+    params: list[object] = []
+    summary_filters: list[str] = []
+    outer_filters: list[str] = ["dr.is_relevant = 1"]
+
+    if backend is not None:
+        summary_filters.append("ds.backend = ?")
+        params.append(backend)
+    if model is not None:
+        summary_filters.append("ds.model = ?")
+        params.append(model)
+    if source_id is not None:
+        outer_filters.append("i.source_id = ?")
+        params.append(source_id)
+
+    summary_where = f"WHERE {' AND '.join(summary_filters)}" if summary_filters else ""
+    outer_filters.append("rs.rn = 1")
+
+    query = f"""
+        WITH ranked_summaries AS (
+            SELECT
+                ds.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ds.document_id
+                    ORDER BY ds.summarized_at DESC, ds.summary_id DESC
+                ) AS rn
+            FROM document_summaries ds
+            {summary_where}
+        )
+        SELECT
+            rs.document_id,
+            rs.backend,
+            rs.model,
+            rs.summary_path,
+            rs.summary,
+            rs.why_it_matters,
+            rs.topic_tags_json,
+            rs.confidence,
+            rs.next_watch,
+            rs.summarized_at,
+            d.title AS document_title,
+            d.url AS document_url,
+            i.title AS meeting_title,
+            i.url AS meeting_url,
+            i.source_id,
+            s.name AS source_name,
+            s.jurisdiction,
+            dr.score
+        FROM ranked_summaries rs
+        JOIN documents d ON d.document_id = rs.document_id
+        JOIN items i ON i.item_id = d.item_id
+        JOIN sources s ON s.source_id = i.source_id
+        JOIN document_relevance dr ON dr.document_id = d.document_id
+        WHERE {" AND ".join(outer_filters)}
+        ORDER BY rs.summarized_at DESC, dr.score DESC, d.title ASC
+    """
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    return connection.execute(query, params).fetchall()
