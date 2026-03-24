@@ -497,8 +497,7 @@ def list_digest_entries(
         params.append(source_id)
 
     summary_where = f"WHERE {' AND '.join(summary_filters)}" if summary_filters else ""
-    latest_clause = "rs.rn = 1" if backend is None and model is None else "1 = 1"
-    outer_filters.append(latest_clause)
+    outer_filters.append("rs.rn = 1")
 
     query = f"""
         WITH ranked_summaries AS (
